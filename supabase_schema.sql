@@ -1,0 +1,3 @@
+-- Legacy pointer kept for convenience.
+-- The production schema now lives in:
+-- supabase/migrations/20260529150000_production_baseline.sql
