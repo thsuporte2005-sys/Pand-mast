@@ -3,8 +3,12 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { KeyRound, Mail, AlertTriangle, ArrowRight, Loader2 } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
 import { getErrorMessage } from '@/lib/errors';
+
+type AdminLoginResponse = {
+  ok: boolean;
+  error?: string;
+};
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -12,46 +16,33 @@ export default function AdminLoginPage() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [infoMessage, setInfoMessage] = useState<string | null>(null);
-  
-  const supabase = createClient();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setErrorMessage(null);
-    setInfoMessage(null);
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password: password,
+      const response = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password,
+        }),
       });
 
-      if (error) {
-        throw new Error(error.message);
+      const result = (await response.json().catch(() => ({
+        ok: false,
+        error: 'Não foi possível processar o login.',
+      }))) as AdminLoginResponse;
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error ?? 'Acesso administrativo negado.');
       }
 
-      if (data?.user) {
-        const { data: adminCheck, error: checkError } = await supabase
-          .from('admins')
-          .select('id')
-          .eq('id', data.user.id)
-          .maybeSingle();
-
-        if (checkError) {
-          throw new Error('Erro ao verificar permissões de administrador.');
-        }
-
-        if (!adminCheck) {
-          await supabase.auth.signOut();
-          throw new Error('Esta conta não possui privilégios de administrador. Cadastre o UID em public.admins pelo Supabase.');
-        }
-
-        // Successfully logged in as admin
-        router.push('/admin/dashboard');
-        router.refresh();
-      }
+      router.replace('/admin/dashboard');
+      router.refresh();
     } catch (err: unknown) {
       setErrorMessage(getErrorMessage(err));
       setLoading(false);
@@ -84,16 +75,6 @@ export default function AdminLoginPage() {
               <div>
                 <p className="font-semibold">Erro de Acesso</p>
                 <p className="text-xs text-red-400/90 mt-0.5">{errorMessage}</p>
-              </div>
-            </div>
-          )}
-
-          {infoMessage && (
-            <div className="flex gap-2.5 items-start bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm p-4 rounded-xl mb-6">
-              <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5 rotate-180 text-emerald-400" />
-              <div>
-                <p className="font-semibold">Configuração</p>
-                <p className="text-xs text-emerald-400/90 mt-0.5">{infoMessage}</p>
               </div>
             </div>
           )}
