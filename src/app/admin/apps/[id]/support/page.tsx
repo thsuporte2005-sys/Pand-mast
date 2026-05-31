@@ -5,18 +5,33 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { z } from 'zod';
 import { ArrowLeft, Image as ImageIcon, Loader2, Save } from 'lucide-react';
+import { saveAdminAppConfiguration } from '@/lib/admin/app-configuration';
 import { sanitizeStorageFileName, validatePublicImage } from '@/lib/app-experience';
-import { getErrorMessage } from '@/lib/errors';
-import { PUBLIC_MEDIA_BUCKET } from '@/lib/storage';
+import { getErrorMessage, logTechnicalError } from '@/lib/errors';
+import { APP_ASSETS_BUCKET } from '@/lib/storage';
 import { createClient } from '@/lib/supabase/client';
 
-const supportSchema = z.object({
-  supportType: z.enum(['whatsapp', 'email', 'external_link']),
-  supportWhatsapp: z.string().optional(),
-  supportEmail: z.string().email('Email de suporte invalido.').optional().or(z.literal('')),
-  supportExternalUrl: z.string().url('Link externo invalido.').optional().or(z.literal('')),
-  supportButtonText: z.string().min(2, 'Informe o texto do botao.'),
-});
+const supportSchema = z
+  .object({
+    supportEnabled: z.boolean(),
+    supportType: z.enum(['whatsapp', 'email', 'external_link']),
+    supportWhatsapp: z.string().optional(),
+    supportEmail: z.string().email('Email de suporte invalido.').optional().or(z.literal('')),
+    supportExternalUrl: z.string().url('Link externo invalido.').optional().or(z.literal('')),
+    supportButtonText: z.string().min(2, 'Informe o texto do botao.'),
+  })
+  .superRefine((values, ctx) => {
+    if (!values.supportEnabled) return;
+    if (values.supportType === 'whatsapp' && !values.supportWhatsapp?.trim()) {
+      ctx.addIssue({ code: 'custom', message: 'Informe o WhatsApp do suporte.', path: ['supportWhatsapp'] });
+    }
+    if (values.supportType === 'email' && !values.supportEmail?.trim()) {
+      ctx.addIssue({ code: 'custom', message: 'Informe o email do suporte.', path: ['supportEmail'] });
+    }
+    if (values.supportType === 'external_link' && !values.supportExternalUrl?.trim()) {
+      ctx.addIssue({ code: 'custom', message: 'Informe o link externo do suporte.', path: ['supportExternalUrl'] });
+    }
+  });
 
 export default function AdminAppSupportPage() {
   const { id: appId } = useParams() as { id: string };
@@ -39,12 +54,13 @@ export default function AdminAppSupportPage() {
   useEffect(() => {
     async function loadSupport() {
       try {
-        const { data: settings } = await supabase
+        const { data: settings, error: settingsError } = await supabase
           .from('app_settings')
           .select('*')
           .eq('app_id', appId)
           .maybeSingle();
 
+        if (settingsError) throw settingsError;
         if (settings) {
           setSupportEnabled(Boolean(settings.support_enabled));
           setSupportType(settings.support_type || 'whatsapp');
@@ -56,6 +72,9 @@ export default function AdminAppSupportPage() {
           setSupportIconPath(settings.support_icon_path || '');
           setShowFloating(settings.support_position !== 'hidden');
         }
+      } catch (err: unknown) {
+        logTechnicalError('Carregar suporte do app', err);
+        setError(getErrorMessage(err, 'Falha ao carregar suporte.'));
       } finally {
         setLoading(false);
       }
@@ -80,16 +99,21 @@ export default function AdminAppSupportPage() {
     try {
       const path = `apps/${appId}/support/${sanitizeStorageFileName(file.name)}`;
       const { error: uploadError } = await supabase.storage
-        .from(PUBLIC_MEDIA_BUCKET)
+        .from(APP_ASSETS_BUCKET)
         .upload(path, file, { upsert: true, contentType: file.type });
 
       if (uploadError) throw uploadError;
 
-      const { data } = supabase.storage.from(PUBLIC_MEDIA_BUCKET).getPublicUrl(path);
+      const { data } = supabase.storage.from(APP_ASSETS_BUCKET).getPublicUrl(path);
       setSupportIconUrl(data.publicUrl);
       setSupportIconPath(path);
+      await saveAdminAppConfiguration(appId, 'audit', {
+        auditAction: 'upload_support_icon',
+        changes: { support_icon_path: path },
+      });
     } catch (err: unknown) {
-      setError(getErrorMessage(err));
+      logTechnicalError('Upload do ícone de suporte', err, 'upload');
+      setError(getErrorMessage(err, 'Falha ao enviar ícone de suporte.', 'upload'));
     } finally {
       setUploading(false);
     }
@@ -103,6 +127,7 @@ export default function AdminAppSupportPage() {
 
     try {
       const parsed = supportSchema.parse({
+        supportEnabled,
         supportType,
         supportWhatsapp,
         supportEmail,
@@ -110,39 +135,21 @@ export default function AdminAppSupportPage() {
         supportButtonText,
       });
 
-      const { data: existingSettings } = await supabase
-        .from('app_settings')
-        .select('primary_color, secondary_color, accent_color, background_color, text_color')
-        .eq('app_id', appId)
-        .maybeSingle();
-
-      const { error: settingsError } = await supabase.from('app_settings').upsert({
-        app_id: appId,
-        primary_color: existingSettings?.primary_color || '#1E6BFF',
-        secondary_color: existingSettings?.secondary_color || '#0B2A4A',
-        accent_color: existingSettings?.accent_color || '#4DA3FF',
-        background_color: existingSettings?.background_color || '#071A2F',
-        text_color: existingSettings?.text_color || '#F5F8FF',
-        support_enabled: supportEnabled,
-        support_type: parsed.supportType,
-        support_whatsapp: parsed.supportWhatsapp || null,
-        support_email: parsed.supportEmail || null,
-        support_external_url: parsed.supportExternalUrl || null,
-        support_button_text: parsed.supportButtonText.trim(),
-        support_icon_url: supportIconUrl || null,
-        support_icon_path: supportIconPath || null,
-        support_position: showFloating ? 'bottom_right' : 'hidden',
-      });
-
-      if (settingsError) throw settingsError;
-
-      await supabase.from('audit_logs').insert({
-        action: 'app_support_updated',
-        details: { app_id: appId, support_enabled: supportEnabled, support_type: parsed.supportType },
+      await saveAdminAppConfiguration(appId, 'support', {
+        supportEnabled,
+        supportType: parsed.supportType,
+        supportWhatsapp: parsed.supportWhatsapp?.trim() || null,
+        supportEmail: parsed.supportEmail?.trim() || null,
+        supportExternalUrl: parsed.supportExternalUrl?.trim() || null,
+        supportButtonText: parsed.supportButtonText.trim(),
+        supportIconUrl: supportIconUrl || null,
+        supportIconPath: supportIconPath || null,
+        supportPosition: showFloating ? 'bottom_right' : 'hidden',
       });
 
       setMessage('Configuracao de suporte salva.');
     } catch (err: unknown) {
+      logTechnicalError('Salvar suporte do app', err);
       setError(getErrorMessage(err));
     } finally {
       setSaving(false);
@@ -219,7 +226,7 @@ export default function AdminAppSupportPage() {
               <p className="text-[11px] text-text-gray">Opcional, usado no botao flutuante e pagina de suporte.</p>
             </div>
           </div>
-          <input type="file" accept="image/*" onChange={uploadIcon} className="block w-full text-xs text-text-gray file:mr-3 file:rounded-lg file:border-0 file:bg-accent-blue file:px-3 file:py-2 file:text-xs file:font-bold file:text-white" />
+          <input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadIcon} className="block w-full text-xs text-text-gray file:mr-3 file:rounded-lg file:border-0 file:bg-accent-blue file:px-3 file:py-2 file:text-xs file:font-bold file:text-white" />
         </div>
 
         {uploading && <p className="text-xs text-light-blue">Enviando icone...</p>}

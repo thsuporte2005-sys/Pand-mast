@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { 
@@ -27,7 +27,7 @@ import {
 } from '@/lib/app-experience';
 import { createClient } from '@/lib/supabase/client';
 import { getErrorMessage } from '@/lib/errors';
-import { PUBLIC_MEDIA_BUCKET } from '@/lib/storage';
+import { APP_ASSETS_BUCKET } from '@/lib/storage';
 
 interface Module {
   id: string;
@@ -63,7 +63,7 @@ interface AppFile {
 
 export default function AppEditorPage() {
   const { id: appId } = useParams() as { id: string };
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   const [appName, setAppName] = useState('');
   const [modules, setModules] = useState<Module[]>([]);
@@ -223,12 +223,12 @@ export default function AppEditorPage() {
     try {
       const path = `apps/${appId}/modules/${sanitizeStorageFileName(file.name)}`;
       const { error } = await supabase.storage
-        .from(PUBLIC_MEDIA_BUCKET)
+        .from(APP_ASSETS_BUCKET)
         .upload(path, file, { upsert: true, contentType: file.type });
 
       if (error) throw error;
 
-      const { data } = supabase.storage.from(PUBLIC_MEDIA_BUCKET).getPublicUrl(path);
+      const { data } = supabase.storage.from(APP_ASSETS_BUCKET).getPublicUrl(path);
       setModuleCoverUrl(data.publicUrl);
       setModuleCoverPath(path);
       if (!moduleCoverAlt) setModuleCoverAlt(moduleName);
@@ -853,7 +853,7 @@ export default function AppEditorPage() {
                     <span className="block font-semibold text-text-gray mb-1.5">Upload da capa</span>
                     <input
                       type="file"
-                      accept="image/*"
+                      accept="image/png,image/jpeg,image/webp"
                       onChange={(event) => handleModuleCoverUpload(event.target.files?.[0])}
                       className="block w-full text-[11px] text-text-gray file:mr-3 file:rounded-lg file:border-0 file:bg-accent-blue file:px-3 file:py-2 file:text-xs file:font-bold file:text-white"
                     />

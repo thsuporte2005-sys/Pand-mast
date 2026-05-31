@@ -17,7 +17,8 @@ export const BRAND_FONT_OPTIONS = [
   'Playfair Display',
 ] as const;
 
-export const PUBLIC_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+export const PUBLIC_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+export const PUBLIC_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
 
 export interface ModuleReleaseConfig {
   release_type?: string | null;
@@ -268,12 +269,12 @@ export function sanitizeStorageFileName(fileName: string) {
 }
 
 export function validatePublicImage(file: File, maxBytes = PUBLIC_IMAGE_MAX_BYTES) {
-  if (!file.type.startsWith('image/')) {
-    return 'Envie uma imagem em PNG, JPG, WEBP, GIF ou SVG.';
+  if (!PUBLIC_IMAGE_MIME_TYPES.includes(file.type as (typeof PUBLIC_IMAGE_MIME_TYPES)[number])) {
+    return 'Envie uma imagem em PNG, JPG ou WEBP.';
   }
 
   if (file.size > maxBytes) {
-    return 'A imagem precisa ter no maximo 10 MB.';
+    return 'A imagem precisa ter no maximo 5 MB.';
   }
 
   return null;

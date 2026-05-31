@@ -4,9 +4,10 @@ import { ChangeEvent, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { ArrowLeft, ImagePlus, Loader2, Save, Trash2 } from 'lucide-react';
+import { saveAdminAppConfiguration } from '@/lib/admin/app-configuration';
 import { sanitizeStorageFileName, validatePublicImage } from '@/lib/app-experience';
-import { getErrorMessage } from '@/lib/errors';
-import { PUBLIC_MEDIA_BUCKET } from '@/lib/storage';
+import { getErrorMessage, logTechnicalError } from '@/lib/errors';
+import { APP_ASSETS_BUCKET } from '@/lib/storage';
 import { createClient } from '@/lib/supabase/client';
 
 interface CarouselImage {
@@ -23,6 +24,7 @@ export default function AdminAppCarouselPage() {
   const supabase = useMemo(() => createClient(), []);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [savingToggle, setSavingToggle] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [carouselEnabled, setCarouselEnabled] = useState(false);
   const [images, setImages] = useState<CarouselImage[]>([]);
@@ -31,21 +33,28 @@ export default function AdminAppCarouselPage() {
 
   useEffect(() => {
     async function loadCarousel() {
-      const { data: settings } = await supabase
-        .from('app_settings')
-        .select('carousel_enabled')
-        .eq('app_id', appId)
-        .maybeSingle();
-      setCarouselEnabled(Boolean(settings?.carousel_enabled));
+      try {
+        const { data: settings, error: settingsError } = await supabase
+          .from('app_settings')
+          .select('carousel_enabled')
+          .eq('app_id', appId)
+          .maybeSingle();
+        if (settingsError) throw settingsError;
+        setCarouselEnabled(Boolean(settings?.carousel_enabled));
 
-      const { data: imageData } = await supabase
-        .from('app_carousel_images')
-        .select('*')
-        .eq('app_id', appId)
-        .order('sort_order', { ascending: true });
-
-      setImages(imageData || []);
-      setLoading(false);
+        const { data: imageData, error: imagesError } = await supabase
+          .from('app_carousel_images')
+          .select('*')
+          .eq('app_id', appId)
+          .order('sort_order', { ascending: true });
+        if (imagesError) throw imagesError;
+        setImages(imageData || []);
+      } catch (err: unknown) {
+        logTechnicalError('Carregar carrossel do app', err);
+        setError(getErrorMessage(err, 'Falha ao carregar carrossel.'));
+      } finally {
+        setLoading(false);
+      }
     }
 
     loadCarousel();
@@ -53,31 +62,20 @@ export default function AdminAppCarouselPage() {
 
   const saveCarouselEnabled = async (enabled: boolean) => {
     setCarouselEnabled(enabled);
+    setSavingToggle(true);
     setMessage(null);
     setError(null);
 
-    const { data: existingSettings } = await supabase
-      .from('app_settings')
-      .select('primary_color, secondary_color, accent_color, background_color, text_color')
-      .eq('app_id', appId)
-      .maybeSingle();
-
-    const { error: settingsError } = await supabase.from('app_settings').upsert({
-      app_id: appId,
-      primary_color: existingSettings?.primary_color || '#1E6BFF',
-      secondary_color: existingSettings?.secondary_color || '#0B2A4A',
-      accent_color: existingSettings?.accent_color || '#4DA3FF',
-      background_color: existingSettings?.background_color || '#071A2F',
-      text_color: existingSettings?.text_color || '#F5F8FF',
-      carousel_enabled: enabled,
-    });
-
-    if (settingsError) {
-      setError(settingsError.message);
-      return;
+    try {
+      await saveAdminAppConfiguration(appId, 'carousel', { carouselEnabled: enabled });
+      setMessage('Status do carrossel atualizado.');
+    } catch (err: unknown) {
+      setCarouselEnabled(!enabled);
+      logTechnicalError('Salvar status do carrossel', err);
+      setError(getErrorMessage(err));
+    } finally {
+      setSavingToggle(false);
     }
-
-    setMessage('Status do carrossel atualizado.');
   };
 
   const uploadCarouselImage = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -97,12 +95,12 @@ export default function AdminAppCarouselPage() {
     try {
       const path = `apps/${appId}/carousel/${sanitizeStorageFileName(file.name)}`;
       const { error: uploadError } = await supabase.storage
-        .from(PUBLIC_MEDIA_BUCKET)
+        .from(APP_ASSETS_BUCKET)
         .upload(path, file, { upsert: true, contentType: file.type });
 
       if (uploadError) throw uploadError;
 
-      const { data } = supabase.storage.from(PUBLIC_MEDIA_BUCKET).getPublicUrl(path);
+      const { data } = supabase.storage.from(APP_ASSETS_BUCKET).getPublicUrl(path);
       const nextOrder = images.length === 0 ? 0 : Math.max(...images.map((image) => image.sort_order)) + 1;
 
       const { data: inserted, error: insertError } = await supabase
@@ -121,9 +119,14 @@ export default function AdminAppCarouselPage() {
       if (insertError) throw insertError;
 
       setImages((current) => [...current, inserted]);
+      await saveAdminAppConfiguration(appId, 'audit', {
+        auditAction: 'update_carousel',
+        changes: { operation: 'upload', image_id: inserted.id, image_path: path },
+      });
       setMessage('Imagem adicionada ao carrossel.');
     } catch (err: unknown) {
-      setError(getErrorMessage(err));
+      logTechnicalError('Upload de imagem do carrossel', err, 'upload');
+      setError(getErrorMessage(err, 'Falha ao enviar imagem do carrossel.', 'upload'));
     } finally {
       setUploading(false);
       event.target.value = '';
@@ -152,8 +155,13 @@ export default function AdminAppCarouselPage() {
         .eq('id', image.id);
 
       if (updateError) throw updateError;
+      await saveAdminAppConfiguration(appId, 'audit', {
+        auditAction: 'update_carousel',
+        changes: { operation: 'update', image_id: image.id },
+      });
       setMessage('Imagem salva.');
     } catch (err: unknown) {
+      logTechnicalError('Salvar imagem do carrossel', err);
       setError(getErrorMessage(err));
     } finally {
       setSavingId(null);
@@ -163,17 +171,22 @@ export default function AdminAppCarouselPage() {
   const deleteImage = async (imageId: string) => {
     if (!confirm('Remover esta imagem do carrossel?')) return;
 
-    const { error: deleteError } = await supabase
-      .from('app_carousel_images')
-      .delete()
-      .eq('id', imageId);
+    try {
+      const { error: deleteError } = await supabase
+        .from('app_carousel_images')
+        .delete()
+        .eq('id', imageId);
 
-    if (deleteError) {
-      setError(deleteError.message);
-      return;
+      if (deleteError) throw deleteError;
+      await saveAdminAppConfiguration(appId, 'audit', {
+        auditAction: 'update_carousel',
+        changes: { operation: 'delete', image_id: imageId },
+      });
+      setImages((current) => current.filter((image) => image.id !== imageId));
+    } catch (err: unknown) {
+      logTechnicalError('Excluir imagem do carrossel', err);
+      setError(getErrorMessage(err));
     }
-
-    setImages((current) => current.filter((image) => image.id !== imageId));
   };
 
   if (loading) {
@@ -203,6 +216,7 @@ export default function AdminAppCarouselPage() {
             <input
               type="checkbox"
               checked={carouselEnabled}
+              disabled={savingToggle}
               onChange={(event) => saveCarouselEnabled(event.target.checked)}
             />
             Carrossel ativo no app final
@@ -210,7 +224,7 @@ export default function AdminAppCarouselPage() {
           <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-accent-blue px-4 py-2.5 text-xs font-bold text-white hover:bg-light-blue">
             {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
             Adicionar imagem
-            <input type="file" accept="image/*" onChange={uploadCarouselImage} className="hidden" />
+            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadCarouselImage} className="hidden" />
           </label>
         </div>
 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Layers, ArrowLeft, Loader2, Save } from 'lucide-react';
@@ -19,7 +19,7 @@ export default function NewAppPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   // Helper to slugify text dynamically
   const slugify = (text: string) => {
@@ -85,14 +85,14 @@ export default function NewAppPage() {
       // 3. Insert App Settings
       const { error: settingsError } = await supabase
         .from('app_settings')
-        .insert({
+        .upsert({
           app_id: newApp.id,
           primary_color: '#1E6BFF',
           secondary_color: '#0B2A4A',
           accent_color: '#4DA3FF',
           background_color: '#071A2F',
           text_color: '#F5F8FF',
-        });
+        }, { onConflict: 'app_id' });
 
       if (settingsError) {
         // Fallback cleanup if settings fail
@@ -103,14 +103,14 @@ export default function NewAppPage() {
       // 4. Insert PWA Settings
       const { error: pwaError } = await supabase
         .from('pwa_settings')
-        .insert({
+        .upsert({
           app_id: newApp.id,
           short_name: name.trim().slice(0, 12),
           theme_color: '#1E6BFF',
           background_color: '#071A2F',
           display: 'standalone',
           orientation: 'portrait',
-        });
+        }, { onConflict: 'app_id' });
 
       if (pwaError) {
         // Cleanup settings and app

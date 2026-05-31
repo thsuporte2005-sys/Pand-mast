@@ -277,7 +277,6 @@ export default function AppHomePage() {
   const brandName = settings?.display_name || app.display_name || app.name;
   const brandSubtitle = settings?.subtitle || app.subtitle || app.description;
   const brandLogo = settings?.logo_url || app.logo_url;
-  const brandMode = settings?.brand_mode || app.brand_mode || 'text';
   const brandFont = settings?.brand_font || app.brand_font || 'Inter';
 
   return (
@@ -291,7 +290,7 @@ export default function AppHomePage() {
       >
         <div className="mx-auto flex h-16 max-w-4xl items-center justify-between px-4">
           <div className="flex min-w-0 items-center gap-3">
-            {brandMode === 'image' && brandLogo ? (
+            {brandLogo ? (
               <img src={brandLogo} alt={brandName} className="h-9 w-9 rounded-xl object-cover" />
             ) : (
               <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-[#4DA3FF]">
@@ -319,6 +318,21 @@ export default function AppHomePage() {
           </div>
         </div>
       </header>
+
+      {carouselImages.length > 0 && (
+        <section className="mx-auto mt-4 max-w-4xl px-4">
+          <div className="flex snap-x gap-3 overflow-x-auto scroll-smooth pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {carouselImages.map((image) => (
+              <div
+                key={image.id}
+                className="relative aspect-[16/9] min-w-[82%] snap-start overflow-hidden rounded-2xl border border-white/10 bg-[#0E223A] sm:min-w-[46%]"
+              >
+                <img src={image.image_url} alt={image.alt_text || brandName} className="h-full w-full object-cover" />
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <main className="mx-auto mt-6 max-w-4xl space-y-6 px-4">
         <section
@@ -363,21 +377,6 @@ export default function AppHomePage() {
             </div>
           )}
         </section>
-
-        {carouselImages.length > 0 && (
-          <section className="space-y-3">
-            <div className="flex gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {carouselImages.map((image) => (
-                <div
-                  key={image.id}
-                  className="relative aspect-[16/9] min-w-[82%] overflow-hidden rounded-2xl border border-white/10 bg-[#0E223A] sm:min-w-[46%]"
-                >
-                  <img src={image.image_url} alt={image.alt_text || brandName} className="h-full w-full object-cover" />
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
 
         <section className="space-y-4">
           <div

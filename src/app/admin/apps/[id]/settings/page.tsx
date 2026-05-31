@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { ChangeEvent, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { 
@@ -11,20 +11,43 @@ import {
   Save, 
   Loader2, 
   Check, 
-  Layers
+  Layers,
+  Trash2,
+  Upload,
 } from 'lucide-react';
+import { AppPreviewPhone } from '@/components/admin/app-preview-phone';
+import { saveAdminAppConfiguration } from '@/lib/admin/app-configuration';
+import { sanitizeStorageFileName, validatePublicImage } from '@/lib/app-experience';
 import { createClient } from '@/lib/supabase/client';
-import { getErrorMessage } from '@/lib/errors';
+import { getErrorMessage, logTechnicalError } from '@/lib/errors';
+import { APP_ASSETS_BUCKET } from '@/lib/storage';
+
+interface PreviewModule {
+  id: string;
+  name: string;
+  cover_image_url?: string | null;
+  release_type?: string | null;
+  release_after_days?: number | null;
+  is_scheduled_release?: boolean | null;
+}
+
+interface PreviewCarouselImage {
+  id: string;
+  image_url: string;
+  alt_text?: string | null;
+  is_active?: boolean;
+}
 
 export default function AppSettingsPage() {
   const { id: appId } = useParams() as { id: string };
   const [activeTab, setActiveTab] = useState<'general' | 'appearance' | 'pwa'>('general');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   // Tab 1: General Form State
   const [name, setName] = useState('');
@@ -33,7 +56,13 @@ export default function AppSettingsPage() {
   const [productIds, setProductIds] = useState('');
   const [status, setStatus] = useState<'draft' | 'published'>('draft');
   const [logoUrl, setLogoUrl] = useState('');
+  const [logoPath, setLogoPath] = useState('');
   const [coverUrl, setCoverUrl] = useState('');
+  const [previewModules, setPreviewModules] = useState<PreviewModule[]>([]);
+  const [previewCarouselImages, setPreviewCarouselImages] = useState<PreviewCarouselImage[]>([]);
+  const [carouselEnabled, setCarouselEnabled] = useState(false);
+  const [supportEnabled, setSupportEnabled] = useState(false);
+  const [supportIconUrl, setSupportIconUrl] = useState('');
 
   // Tab 2: Appearance Form State
   const [primaryColor, setPrimaryColor] = useState('#1E6BFF');
@@ -62,7 +91,8 @@ export default function AppSettingsPage() {
           .eq('id', appId)
           .single();
 
-        if (appErr || !appData) throw new Error('Falha ao carregar dados do app.');
+        if (appErr) throw appErr;
+        if (!appData) throw new Error('Aplicativo não encontrado.');
 
         setName(appData.name);
         setSlug(appData.slug);
@@ -70,15 +100,17 @@ export default function AppSettingsPage() {
         setProductIds(appData.product_ids || '');
         setStatus(appData.status);
         setLogoUrl(appData.logo_url || '');
+        setLogoPath(appData.logo_path || '');
         setCoverUrl(appData.cover_url || '');
 
         // Fetch App Settings (Colors)
-        const { data: settingsData } = await supabase
+        const { data: settingsData, error: settingsError } = await supabase
           .from('app_settings')
           .select('*')
           .eq('app_id', appId)
           .maybeSingle();
 
+        if (settingsError) throw settingsError;
         if (settingsData) {
           setPrimaryColor(settingsData.primary_color);
           setSecondaryColor(settingsData.secondary_color);
@@ -86,15 +118,19 @@ export default function AppSettingsPage() {
           setBackgroundColor(settingsData.background_color);
           setTextColor(settingsData.text_color);
           setCustomDomain(settingsData.custom_domain || '');
+          setCarouselEnabled(Boolean(settingsData.carousel_enabled));
+          setSupportEnabled(Boolean(settingsData.support_enabled && settingsData.support_position !== 'hidden'));
+          setSupportIconUrl(settingsData.support_icon_url || '');
         }
 
         // Fetch PWA settings
-        const { data: pwaData } = await supabase
+        const { data: pwaData, error: pwaError } = await supabase
           .from('pwa_settings')
           .select('*')
           .eq('app_id', appId)
           .maybeSingle();
 
+        if (pwaError) throw pwaError;
         if (pwaData) {
           setPwaShortName(pwaData.short_name || '');
           setPwaThemeColor(pwaData.theme_color);
@@ -103,7 +139,26 @@ export default function AppSettingsPage() {
           setPwaOrientation(pwaData.orientation);
         }
 
+        const [{ data: moduleData, error: moduleError }, { data: carouselData, error: carouselError }] =
+          await Promise.all([
+            supabase
+              .from('app_modules')
+              .select('id, name, cover_image_url, release_type, release_after_days, is_scheduled_release')
+              .eq('app_id', appId)
+              .order('order_index', { ascending: true }),
+            supabase
+              .from('app_carousel_images')
+              .select('id, image_url, alt_text, is_active')
+              .eq('app_id', appId)
+              .order('sort_order', { ascending: true }),
+          ]);
+
+        if (moduleError) throw moduleError;
+        if (carouselError) throw carouselError;
+        setPreviewModules(moduleData || []);
+        setPreviewCarouselImages(carouselData || []);
       } catch (err: unknown) {
+        logTechnicalError('Carregar configurações do app', err);
         setError(getErrorMessage(err, 'Erro ao carregar dados do aplicativo.'));
       } finally {
         setLoading(false);
@@ -113,6 +168,42 @@ export default function AppSettingsPage() {
     loadSettings();
   }, [appId, supabase]);
 
+  const uploadLogo = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const validationError = validatePublicImage(file);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setUploadingLogo(true);
+    setError(null);
+
+    try {
+      const path = `apps/${appId}/branding/logo-${sanitizeStorageFileName(file.name)}`;
+      const { error: uploadError } = await supabase.storage
+        .from(APP_ASSETS_BUCKET)
+        .upload(path, file, { upsert: true, contentType: file.type });
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from(APP_ASSETS_BUCKET).getPublicUrl(path);
+      setLogoUrl(data.publicUrl);
+      setLogoPath(path);
+      await saveAdminAppConfiguration(appId, 'audit', {
+        auditAction: 'upload_app_logo',
+        changes: { logo_path: path },
+      });
+    } catch (err: unknown) {
+      logTechnicalError('Upload da logo do app', err, 'upload');
+      setError(getErrorMessage(err, 'Falha ao enviar logo.', 'upload'));
+    } finally {
+      setUploadingLogo(false);
+      event.target.value = '';
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -121,61 +212,39 @@ export default function AppSettingsPage() {
 
     try {
       if (activeTab === 'general') {
-        // Update general table
-        const { error: err } = await supabase
-          .from('apps')
-          .update({
-            name,
-            slug,
-            description: description.trim() || null,
-            product_ids: productIds.trim() || null,
-            status,
-            logo_url: logoUrl.trim() || null,
-            cover_url: coverUrl.trim() || null,
-          })
-          .eq('id', appId);
-
-        if (err) throw err;
+        await saveAdminAppConfiguration(appId, 'general', {
+          name,
+          slug,
+          description: description.trim() || null,
+          productIds: productIds.trim() || null,
+          status,
+          logoUrl: logoUrl.trim() || null,
+          logoPath: logoPath.trim() || null,
+          coverUrl: coverUrl.trim() || null,
+        });
       } else if (activeTab === 'appearance') {
-        // Update settings table
-        const { error: err } = await supabase
-          .from('app_settings')
-          .upsert({
-            app_id: appId,
-            primary_color: primaryColor,
-            secondary_color: secondaryColor,
-            accent_color: accentColor,
-            background_color: backgroundColor,
-            text_color: textColor,
-            custom_domain: customDomain.trim() || null,
-          }, { onConflict: 'app_id' });
-
-        if (err) throw err;
+        await saveAdminAppConfiguration(appId, 'appearance', {
+          primaryColor,
+          secondaryColor,
+          accentColor,
+          backgroundColor,
+          textColor,
+          customDomain: customDomain.trim() || null,
+        });
       } else if (activeTab === 'pwa') {
-        // Update pwa table
-        const { error: err } = await supabase
-          .from('pwa_settings')
-          .upsert({
-            app_id: appId,
-            short_name: pwaShortName.trim() || null,
-            theme_color: pwaThemeColor,
-            background_color: pwaBgColor,
-            display: pwaDisplay,
-            orientation: pwaOrientation,
-          }, { onConflict: 'app_id' });
-
-        if (err) throw err;
+        await saveAdminAppConfiguration(appId, 'pwa', {
+          shortName: pwaShortName.trim() || null,
+          themeColor: pwaThemeColor,
+          backgroundColor: pwaBgColor,
+          display: pwaDisplay,
+          orientation: pwaOrientation,
+        });
       }
-
-      // Log action
-      await supabase.from('audit_logs').insert({
-        action: `app_settings_updated_${activeTab}`,
-        details: { app_id: appId },
-      });
 
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2500);
     } catch (err: unknown) {
+      logTechnicalError('Salvar configurações do app', err);
       setError(getErrorMessage(err, 'Falha ao salvar as alterações.'));
     } finally {
       setSaving(false);
@@ -203,7 +272,7 @@ export default function AppSettingsPage() {
   ];
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
+    <div className="mx-auto max-w-7xl space-y-6">
       
       {/* Breadcrumbs */}
       <div className="flex items-center gap-3">
@@ -295,8 +364,9 @@ export default function AppSettingsPage() {
         </div>
       )}
 
+      <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_338px]">
       {/* Forms Body */}
-      <form onSubmit={handleSave} className="glass-panel p-6 sm:p-8 rounded-2xl space-y-6">
+      <form onSubmit={handleSave} className="glass-panel space-y-6 rounded-2xl p-6 sm:p-8">
         
         {/* Tab 1: GENERAL */}
         {activeTab === 'general' && (
@@ -372,17 +442,50 @@ export default function AppSettingsPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-4 border-t border-border-color/20">
-              <div>
+            <div className="grid grid-cols-1 gap-6 border-t border-border-color/20 pt-4 sm:grid-cols-2">
+              <div className="space-y-3">
                 <label className="block text-xs font-semibold text-text-gray uppercase tracking-wider mb-2">
-                  URL do Logo
+                  Logo do app
                 </label>
-                <input
-                  type="url"
-                  value={logoUrl}
-                  onChange={(e) => setLogoUrl(e.target.value)}
-                  className="w-full bg-primary-bg border border-border-color text-text-white px-4 py-2.5 rounded-xl focus:outline-none focus:border-accent-blue text-sm"
-                />
+                <div className="flex items-center gap-3 rounded-xl border border-border-color bg-primary-bg p-3">
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border-color bg-card-bg text-light-blue">
+                    {logoUrl ? (
+                      <img src={logoUrl} alt={name} className="h-full w-full object-cover" />
+                    ) : (
+                      <Layers className="h-6 w-6" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold text-text-white">Imagem no header do app</p>
+                    <p className="mt-1 text-[10px] text-text-gray">PNG, JPG ou WEBP. Máximo de 5 MB.</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-accent-blue px-3 py-2 text-xs font-bold text-white transition hover:bg-light-blue">
+                    {uploadingLogo ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                    {logoUrl ? 'Trocar logo' : 'Adicionar logo'}
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={uploadLogo}
+                      disabled={uploadingLogo}
+                      className="hidden"
+                    />
+                  </label>
+                  {logoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLogoUrl('');
+                        setLogoPath('');
+                      }}
+                      className="inline-flex items-center gap-2 rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-200 transition hover:bg-red-500/20"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Remover
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div>
@@ -608,7 +711,7 @@ export default function AppSettingsPage() {
         <div className="flex items-center justify-end gap-3 border-t border-border-color/30 pt-6">
           <button
             type="submit"
-            disabled={saving}
+            disabled={saving || uploadingLogo}
             className="bg-accent-blue hover:bg-light-blue disabled:bg-accent-blue/50 text-text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 flex items-center gap-1.5 shadow-lg shadow-accent-blue/15"
           >
             {saving ? (
@@ -626,6 +729,24 @@ export default function AppSettingsPage() {
         </div>
 
       </form>
+
+      <AppPreviewPhone
+        name={name}
+        description={description}
+        logoUrl={logoUrl}
+        coverUrl={coverUrl}
+        primaryColor={primaryColor}
+        secondaryColor={secondaryColor}
+        accentColor={accentColor}
+        backgroundColor={backgroundColor}
+        textColor={textColor}
+        carouselEnabled={carouselEnabled}
+        carouselImages={previewCarouselImages}
+        modules={previewModules}
+        supportEnabled={supportEnabled}
+        supportIconUrl={supportIconUrl}
+      />
+      </div>
 
     </div>
   );

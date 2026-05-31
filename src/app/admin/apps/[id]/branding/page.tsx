@@ -4,15 +4,16 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { z } from 'zod';
-import { ArrowLeft, Image as ImageIcon, Loader2, Save } from 'lucide-react';
+import { ArrowLeft, Image as ImageIcon, Loader2, Save, Trash2 } from 'lucide-react';
+import { saveAdminAppConfiguration } from '@/lib/admin/app-configuration';
 import {
   BRAND_FONT_OPTIONS,
   LANGUAGE_OPTIONS,
   sanitizeStorageFileName,
   validatePublicImage,
 } from '@/lib/app-experience';
-import { getErrorMessage } from '@/lib/errors';
-import { PUBLIC_MEDIA_BUCKET } from '@/lib/storage';
+import { getErrorMessage, logTechnicalError } from '@/lib/errors';
+import { APP_ASSETS_BUCKET } from '@/lib/storage';
 import { createClient } from '@/lib/supabase/client';
 
 const brandingSchema = z.object({
@@ -46,18 +47,21 @@ export default function AdminAppBrandingPage() {
   useEffect(() => {
     async function loadBranding() {
       try {
-        const { data: app } = await supabase
+        const { data: app, error: appError } = await supabase
           .from('apps')
           .select('*')
           .eq('id', appId)
           .single();
 
-        const { data: settings } = await supabase
+        if (appError) throw appError;
+
+        const { data: settings, error: settingsError } = await supabase
           .from('app_settings')
           .select('*')
           .eq('app_id', appId)
           .maybeSingle();
 
+        if (settingsError) throw settingsError;
         if (app) {
           setName(app.name || '');
           setDisplayName(settings?.display_name || app.display_name || app.name || '');
@@ -70,6 +74,9 @@ export default function AdminAppBrandingPage() {
           setSquareIconUrl(settings?.square_icon_url || app.square_icon_url || '');
           setSquareIconPath(settings?.square_icon_path || app.square_icon_path || '');
         }
+      } catch (err: unknown) {
+        logTechnicalError('Carregar branding do app', err);
+        setError(getErrorMessage(err, 'Falha ao carregar branding.'));
       } finally {
         setLoading(false);
       }
@@ -93,12 +100,12 @@ export default function AdminAppBrandingPage() {
     try {
       const path = `apps/${appId}/branding/${target}-${sanitizeStorageFileName(file.name)}`;
       const { error: uploadError } = await supabase.storage
-        .from(PUBLIC_MEDIA_BUCKET)
+        .from(APP_ASSETS_BUCKET)
         .upload(path, file, { upsert: true, contentType: file.type });
 
       if (uploadError) throw uploadError;
 
-      const { data } = supabase.storage.from(PUBLIC_MEDIA_BUCKET).getPublicUrl(path);
+      const { data } = supabase.storage.from(APP_ASSETS_BUCKET).getPublicUrl(path);
 
       if (target === 'logo') {
         setLogoUrl(data.publicUrl);
@@ -107,8 +114,13 @@ export default function AdminAppBrandingPage() {
         setSquareIconUrl(data.publicUrl);
         setSquareIconPath(path);
       }
+      await saveAdminAppConfiguration(appId, 'audit', {
+        auditAction: 'upload_app_logo',
+        changes: { target, image_path: path },
+      });
     } catch (err: unknown) {
-      setError(getErrorMessage(err));
+      logTechnicalError('Upload da identidade visual', err, 'upload');
+      setError(getErrorMessage(err, 'Falha ao enviar imagem.', 'upload'));
     } finally {
       setUploading(false);
     }
@@ -130,55 +142,22 @@ export default function AdminAppBrandingPage() {
         defaultLanguage,
       });
 
-      const appPayload = {
+      await saveAdminAppConfiguration(appId, 'branding', {
         name: parsed.name.trim(),
-        display_name: parsed.displayName?.trim() || parsed.name.trim(),
+        displayName: parsed.displayName?.trim() || parsed.name.trim(),
         subtitle: parsed.subtitle?.trim() || null,
-        logo_url: logoUrl || null,
-        logo_path: logoPath || null,
-        square_icon_url: squareIconUrl || null,
-        square_icon_path: squareIconPath || null,
-        brand_mode: parsed.brandMode,
-        brand_font: parsed.brandFont,
-        default_language: parsed.defaultLanguage,
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error: appError } = await supabase.from('apps').update(appPayload).eq('id', appId);
-      if (appError) throw appError;
-
-      const { data: existingSettings } = await supabase
-        .from('app_settings')
-        .select('primary_color, secondary_color, accent_color, background_color, text_color')
-        .eq('app_id', appId)
-        .maybeSingle();
-
-      const { error: settingsError } = await supabase.from('app_settings').upsert({
-        app_id: appId,
-        primary_color: existingSettings?.primary_color || '#1E6BFF',
-        secondary_color: existingSettings?.secondary_color || '#0B2A4A',
-        accent_color: existingSettings?.accent_color || '#4DA3FF',
-        background_color: existingSettings?.background_color || '#071A2F',
-        text_color: existingSettings?.text_color || '#F5F8FF',
-        display_name: appPayload.display_name,
-        subtitle: appPayload.subtitle,
-        logo_url: appPayload.logo_url,
-        logo_path: appPayload.logo_path,
-        square_icon_url: appPayload.square_icon_url,
-        square_icon_path: appPayload.square_icon_path,
-        brand_mode: appPayload.brand_mode,
-        brand_font: appPayload.brand_font,
-      });
-
-      if (settingsError) throw settingsError;
-
-      await supabase.from('audit_logs').insert({
-        action: 'app_branding_updated',
-        details: { app_id: appId },
+        logoUrl: logoUrl || null,
+        logoPath: logoPath || null,
+        squareIconUrl: squareIconUrl || null,
+        squareIconPath: squareIconPath || null,
+        brandMode: parsed.brandMode,
+        brandFont: parsed.brandFont,
+        defaultLanguage: parsed.defaultLanguage,
       });
 
       setMessage('Branding salvo com sucesso.');
     } catch (err: unknown) {
+      logTechnicalError('Salvar branding do app', err);
       setError(getErrorMessage(err));
     } finally {
       setSaving(false);
@@ -210,12 +189,32 @@ export default function AdminAppBrandingPage() {
           <p className="text-[11px] text-text-gray">{target === 'square' ? 'Ideal 1080x1080 para PWA.' : 'Usado no topo do app final.'}</p>
         </div>
       </div>
-      <input
-        type="file"
-        accept="image/*"
-        onChange={onChange}
-        className="block w-full text-xs text-text-gray file:mr-3 file:rounded-lg file:border-0 file:bg-accent-blue file:px-3 file:py-2 file:text-xs file:font-bold file:text-white"
-      />
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          onChange={onChange}
+          className="block min-w-0 flex-1 text-xs text-text-gray file:mr-3 file:rounded-lg file:border-0 file:bg-accent-blue file:px-3 file:py-2 file:text-xs file:font-bold file:text-white"
+        />
+        {url && (
+          <button
+            type="button"
+            onClick={() => {
+              if (target === 'logo') {
+                setLogoUrl('');
+                setLogoPath('');
+              } else {
+                setSquareIconUrl('');
+                setSquareIconPath('');
+              }
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs font-bold text-red-200 hover:bg-red-500/20"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Remover
+          </button>
+        )}
+      </div>
     </div>
   );
 
