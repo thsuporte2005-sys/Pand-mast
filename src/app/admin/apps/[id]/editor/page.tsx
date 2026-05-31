@@ -16,16 +16,30 @@ import {
   ChevronUp,
   ChevronDown,
   Paperclip,
-  Loader2
+  Loader2,
+  CalendarDays,
+  Image as ImageIcon,
+  Upload
 } from 'lucide-react';
+import {
+  sanitizeStorageFileName,
+  validatePublicImage,
+} from '@/lib/app-experience';
 import { createClient } from '@/lib/supabase/client';
 import { getErrorMessage } from '@/lib/errors';
+import { PUBLIC_MEDIA_BUCKET } from '@/lib/storage';
 
 interface Module {
   id: string;
   name: string;
   description: string | null;
   order_index: number;
+  cover_image_url: string | null;
+  cover_image_path: string | null;
+  cover_alt_text: string | null;
+  release_type: 'immediate' | 'after_purchase_days' | string;
+  release_after_days: number;
+  is_scheduled_release: boolean;
 }
 
 interface Lesson {
@@ -68,6 +82,12 @@ export default function AppEditorPage() {
   const [moduleFormId, setModuleFormId] = useState<string | null>(null);
   const [moduleName, setModuleName] = useState('');
   const [moduleDesc, setModuleDesc] = useState('');
+  const [moduleCoverUrl, setModuleCoverUrl] = useState('');
+  const [moduleCoverPath, setModuleCoverPath] = useState('');
+  const [moduleCoverAlt, setModuleCoverAlt] = useState('');
+  const [moduleReleaseType, setModuleReleaseType] = useState<'immediate' | 'after_purchase_days'>('immediate');
+  const [moduleReleaseAfterDays, setModuleReleaseAfterDays] = useState(0);
+  const [moduleUploading, setModuleUploading] = useState(false);
 
   const [showLessonModal, setShowLessonModal] = useState(false);
   const [lessonFormId, setLessonFormId] = useState<string | null>(null);
@@ -165,6 +185,11 @@ export default function AppEditorPage() {
     setModuleFormId(null);
     setModuleName('');
     setModuleDesc('');
+    setModuleCoverUrl('');
+    setModuleCoverPath('');
+    setModuleCoverAlt('');
+    setModuleReleaseType('immediate');
+    setModuleReleaseAfterDays(0);
     setShowModuleModal(true);
   };
 
@@ -172,7 +197,46 @@ export default function AppEditorPage() {
     setModuleFormId(mod.id);
     setModuleName(mod.name);
     setModuleDesc(mod.description || '');
+    setModuleCoverUrl(mod.cover_image_url || '');
+    setModuleCoverPath(mod.cover_image_path || '');
+    setModuleCoverAlt(mod.cover_alt_text || '');
+    setModuleReleaseType(
+      mod.release_type === 'after_purchase_days' || mod.is_scheduled_release
+        ? 'after_purchase_days'
+        : 'immediate'
+    );
+    setModuleReleaseAfterDays(Math.max(0, Number(mod.release_after_days || 0)));
     setShowModuleModal(true);
+  };
+
+  const handleModuleCoverUpload = async (file: File | undefined) => {
+    if (!file) return;
+
+    const validationError = validatePublicImage(file);
+    if (validationError) {
+      alert(validationError);
+      return;
+    }
+
+    setModuleUploading(true);
+
+    try {
+      const path = `apps/${appId}/modules/${sanitizeStorageFileName(file.name)}`;
+      const { error } = await supabase.storage
+        .from(PUBLIC_MEDIA_BUCKET)
+        .upload(path, file, { upsert: true, contentType: file.type });
+
+      if (error) throw error;
+
+      const { data } = supabase.storage.from(PUBLIC_MEDIA_BUCKET).getPublicUrl(path);
+      setModuleCoverUrl(data.publicUrl);
+      setModuleCoverPath(path);
+      if (!moduleCoverAlt) setModuleCoverAlt(moduleName);
+    } catch (err: unknown) {
+      alert('Erro ao enviar capa: ' + getErrorMessage(err));
+    } finally {
+      setModuleUploading(false);
+    }
   };
 
   const handleModuleSubmit = async (e: React.FormEvent) => {
@@ -181,15 +245,29 @@ export default function AppEditorPage() {
     setActionLoading(true);
 
     try {
+      const releaseAfterDays = moduleReleaseType === 'after_purchase_days'
+        ? Math.max(0, Number(moduleReleaseAfterDays || 0))
+        : 0;
+      const modulePayload = {
+        name: moduleName.trim(),
+        description: moduleDesc || null,
+        cover_image_url: moduleCoverUrl || null,
+        cover_image_path: moduleCoverPath || null,
+        cover_alt_text: moduleCoverAlt || moduleName.trim(),
+        release_type: moduleReleaseType,
+        release_after_days: releaseAfterDays,
+        is_scheduled_release: moduleReleaseType === 'after_purchase_days',
+      };
+
       if (moduleFormId) {
         // Edit module
         const { error } = await supabase
           .from('app_modules')
-          .update({ name: moduleName, description: moduleDesc })
+          .update(modulePayload)
           .eq('id', moduleFormId);
 
         if (error) throw error;
-        setModules(modules.map(m => m.id === moduleFormId ? { ...m, name: moduleName, description: moduleDesc } : m));
+        setModules(modules.map(m => m.id === moduleFormId ? { ...m, ...modulePayload } : m));
       } else {
         // Create module
         const nextOrder = modules.length;
@@ -197,8 +275,7 @@ export default function AppEditorPage() {
           .from('app_modules')
           .insert({
             app_id: appId,
-            name: moduleName,
-            description: moduleDesc || null,
+            ...modulePayload,
             order_index: nextOrder
           })
           .select()
@@ -486,9 +563,28 @@ export default function AppEditorPage() {
                         <span className="font-mono text-[10px] text-text-gray/50 font-bold">
                           {(index + 1).toString().padStart(2, '0')}
                         </span>
+                        <div className="h-10 w-12 shrink-0 overflow-hidden rounded-lg border border-border-color/50 bg-primary-bg/60">
+                          {mod.cover_image_url ? (
+                            <img src={mod.cover_image_url} alt={mod.cover_alt_text || mod.name} className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-light-blue">
+                              <ImageIcon className="h-4 w-4" />
+                            </div>
+                          )}
+                        </div>
                         <div className="min-w-0">
                           <p className="font-bold text-xs truncate">{mod.name}</p>
                           {mod.description && <p className="text-[10px] text-text-gray truncate">{mod.description}</p>}
+                          <span className={`mt-1 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${
+                            mod.release_type === 'after_purchase_days' || mod.is_scheduled_release
+                              ? 'border-amber-400/20 bg-amber-400/10 text-amber-200'
+                              : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+                          }`}>
+                            <CalendarDays className="h-3 w-3" />
+                            {mod.release_type === 'after_purchase_days' || mod.is_scheduled_release
+                              ? `${mod.release_after_days || 0} dias apos compra`
+                              : 'Imediato'}
+                          </span>
                         </div>
                       </div>
 
@@ -712,7 +808,7 @@ export default function AppEditorPage() {
       {/* 1. MODULE MODAL */}
       {showModuleModal && (
         <div className="fixed inset-0 bg-primary-bg/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <form onSubmit={handleModuleSubmit} className="bg-secondary-bg border border-border-color max-w-md w-full p-6 rounded-2xl shadow-2xl space-y-4">
+          <form onSubmit={handleModuleSubmit} className="bg-secondary-bg border border-border-color max-w-2xl w-full p-6 rounded-2xl shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
             <h3 className="text-sm font-bold text-text-white">
               {moduleFormId ? 'Editar Módulo' : 'Novo Módulo'}
             </h3>
@@ -739,6 +835,97 @@ export default function AppEditorPage() {
                   onChange={(e) => setModuleDesc(e.target.value)}
                   className="w-full bg-primary-bg border border-border-color text-text-white px-3.5 py-2.5 rounded-xl focus:outline-none focus:border-accent-blue"
                 />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-[11rem_1fr] gap-4">
+                <div className="h-32 overflow-hidden rounded-xl border border-border-color bg-primary-bg">
+                  {moduleCoverUrl ? (
+                    <img src={moduleCoverUrl} alt={moduleCoverAlt || moduleName} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-text-gray">
+                      <ImageIcon className="h-8 w-8 text-light-blue" />
+                      <span className="text-[10px]">Capa do modulo</span>
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-3">
+                  <label className="block">
+                    <span className="block font-semibold text-text-gray mb-1.5">Upload da capa</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(event) => handleModuleCoverUpload(event.target.files?.[0])}
+                      className="block w-full text-[11px] text-text-gray file:mr-3 file:rounded-lg file:border-0 file:bg-accent-blue file:px-3 file:py-2 file:text-xs file:font-bold file:text-white"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block font-semibold text-text-gray mb-1.5">Texto alternativo da capa</span>
+                    <input
+                      type="text"
+                      value={moduleCoverAlt}
+                      onChange={(event) => setModuleCoverAlt(event.target.value)}
+                      placeholder="Ex: Capa do modulo de boas-vindas"
+                      className="w-full bg-primary-bg border border-border-color text-text-white px-3.5 py-2.5 rounded-xl focus:outline-none focus:border-accent-blue"
+                    />
+                  </label>
+                  {moduleUploading && (
+                    <p className="flex items-center gap-1.5 text-[10px] text-light-blue">
+                      <Upload className="h-3 w-3 animate-pulse" />
+                      Enviando imagem...
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-border-color/60 bg-primary-bg/50 p-4 space-y-3">
+                <label className="block font-semibold text-text-gray">Liberacao do modulo</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className={`cursor-pointer rounded-xl border p-3 transition ${
+                    moduleReleaseType === 'immediate'
+                      ? 'border-accent-blue bg-accent-blue/10 text-text-white'
+                      : 'border-border-color bg-card-bg/50 text-text-gray'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="moduleReleaseType"
+                      value="immediate"
+                      checked={moduleReleaseType === 'immediate'}
+                      onChange={() => setModuleReleaseType('immediate')}
+                      className="sr-only"
+                    />
+                    <span className="block text-xs font-bold">Liberar imediatamente</span>
+                    <span className="mt-1 block text-[10px] text-text-gray">Aluno acessa assim que tiver acesso ao app.</span>
+                  </label>
+                  <label className={`cursor-pointer rounded-xl border p-3 transition ${
+                    moduleReleaseType === 'after_purchase_days'
+                      ? 'border-accent-blue bg-accent-blue/10 text-text-white'
+                      : 'border-border-color bg-card-bg/50 text-text-gray'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="moduleReleaseType"
+                      value="after_purchase_days"
+                      checked={moduleReleaseType === 'after_purchase_days'}
+                      onChange={() => setModuleReleaseType('after_purchase_days')}
+                      className="sr-only"
+                    />
+                    <span className="block text-xs font-bold">Liberar apos X dias</span>
+                    <span className="mt-1 block text-[10px] text-text-gray">Conta a partir da liberacao do acesso.</span>
+                  </label>
+                </div>
+
+                {moduleReleaseType === 'after_purchase_days' && (
+                  <label className="block">
+                    <span className="block font-semibold text-text-gray mb-1.5">Dias apos a compra/liberacao</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={moduleReleaseAfterDays}
+                      onChange={(event) => setModuleReleaseAfterDays(Number(event.target.value))}
+                      className="w-full bg-primary-bg border border-border-color text-text-white px-3.5 py-2.5 rounded-xl focus:outline-none focus:border-accent-blue"
+                    />
+                  </label>
+                )}
               </div>
             </div>
 

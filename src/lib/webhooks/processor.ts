@@ -190,11 +190,13 @@ export async function processWebhookEvent(data: StandardWebhookData) {
       const { error: accessError } = await adminClient.from('user_app_access').upsert(
         {
           user_id: userId,
+          final_user_id: userId,
           app_id: matchedApp.id,
           status: 'active',
           platform: data.platform,
           transaction_id: data.transaction_id,
           granted_at: new Date().toISOString(),
+          access_granted_at: new Date().toISOString(),
         },
         { onConflict: 'user_id,app_id' }
       );

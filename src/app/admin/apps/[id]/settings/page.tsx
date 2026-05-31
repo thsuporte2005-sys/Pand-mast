@@ -191,6 +191,17 @@ export default function AppSettingsPage() {
     );
   }
 
+  const advancedLinks = [
+    { label: 'Editor', href: `/admin/apps/${appId}/editor` },
+    { label: 'Marca', href: `/admin/apps/${appId}/branding` },
+    { label: 'Carrossel', href: `/admin/apps/${appId}/carousel` },
+    { label: 'Suporte', href: `/admin/apps/${appId}/support` },
+    { label: 'Avisos', href: `/admin/apps/${appId}/notices` },
+    { label: 'Comunidade', href: `/admin/apps/${appId}/community` },
+    { label: 'Idiomas', href: `/admin/apps/${appId}/translations` },
+    { label: 'Alunos', href: `/admin/apps/${appId}/users` },
+  ];
+
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       
@@ -219,6 +230,18 @@ export default function AppSettingsPage() {
             <p className="text-xs text-text-gray mt-0.5">Defina a identidade visual, slug, cores e manifest PWA.</p>
           </div>
         </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {advancedLinks.map((item) => (
+          <Link
+            key={item.href}
+            href={item.href}
+            className="rounded-xl border border-border-color bg-card-bg/50 px-3 py-2 text-center text-xs font-bold text-text-gray transition hover:border-accent-blue/50 hover:text-text-white"
+          >
+            {item.label}
+          </Link>
+        ))}
       </div>
 
       {/* Tabs Menu */}

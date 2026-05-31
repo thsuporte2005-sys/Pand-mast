@@ -15,8 +15,11 @@ import {
   FileCheck,
   Video
 } from 'lucide-react';
+import { AppBottomNav } from '@/components/app-bottom-nav';
+import { AppSupportButton } from '@/components/app-support-button';
+import { getModuleReleaseState, type AccessGrant } from '@/lib/app-experience';
 import { createClient } from '@/lib/supabase/client';
-import type { AppRecord, AppTheme } from '@/lib/types';
+import type { AppRecord, AppSettingsRecord, AppTheme } from '@/lib/types';
 
 interface Lesson {
   id: string;
@@ -43,6 +46,7 @@ export default function LessonPlayPage() {
 
   const [loading, setLoading] = useState(true);
   const [app, setApp] = useState<AppRecord | null>(null);
+  const [settings, setSettings] = useState<AppSettingsRecord | null>(null);
   const [colors, setColors] = useState<AppTheme>({
     primary_color: '#1E6BFF',
     secondary_color: '#0B2A4A',
@@ -127,10 +131,34 @@ export default function LessonPlayPage() {
         setApp(appData);
 
         // 2. Auth & Progress Check
+        let effectiveAccessForRequest: AccessGrant | null = null;
         const { data: { user } } = await supabase.auth.getUser();
         if (user) {
           setUserId(user.id);
-          
+
+          const { data: adminCheck } = await supabase
+            .from('admins')
+            .select('id')
+            .eq('id', user.id)
+            .maybeSingle();
+
+          const { data: accessData } = await supabase
+            .from('user_app_access')
+            .select('status, granted_at, access_granted_at')
+            .eq('user_id', user.id)
+            .eq('app_id', appData.id)
+            .maybeSingle();
+
+          const effectiveAccess = adminCheck
+            ? { status: 'active', access_granted_at: '2000-01-01T00:00:00.000Z' }
+            : accessData;
+          effectiveAccessForRequest = effectiveAccess;
+
+          if (!adminCheck && (!accessData || accessData.status !== 'active')) {
+            router.push(`/app/${slug}/login?error=no-access`);
+            return;
+          }
+
           const localProgress = localStorage.getItem(`progress_${user.id}_${appData.id}`);
           if (localProgress) {
             setCompletedLessonIds(JSON.parse(localProgress));
@@ -148,6 +176,7 @@ export default function LessonPlayPage() {
           .maybeSingle();
 
         if (colorsData) {
+          setSettings(colorsData);
           setColors({
             primary_color: colorsData.primary_color,
             secondary_color: colorsData.secondary_color,
@@ -165,6 +194,25 @@ export default function LessonPlayPage() {
           .single();
 
         if (lessonData) {
+          const { data: moduleData } = await supabase
+            .from('app_modules')
+            .select('id, release_type, release_after_days, is_scheduled_release')
+            .eq('id', lessonData.module_id)
+            .maybeSingle();
+
+          if (moduleData) {
+            const releaseState = getModuleReleaseState(
+              moduleData,
+              effectiveAccessForRequest,
+              appData.default_language || 'pt-BR'
+            );
+
+            if (!releaseState.isUnlocked) {
+              router.push(`/app/${slug}/modules/${lessonData.module_id}`);
+              return;
+            }
+          }
+
           setCurrentLesson(lessonData);
 
           // Fetch all published lessons in this module to build Prev/Next
@@ -176,6 +224,9 @@ export default function LessonPlayPage() {
             .order('order_index', { ascending: true });
 
           setAllLessons(relativeLessons || []);
+        } else {
+          router.push(`/app/${slug}/modules`);
+          return;
         }
 
         // 5. Fetch attachments/files
@@ -240,7 +291,7 @@ export default function LessonPlayPage() {
 
   return (
     <div 
-      className="min-h-screen pb-12 transition-colors duration-300 font-sans text-xs flex flex-col"
+      className="min-h-screen pb-28 transition-colors duration-300 font-sans text-xs flex flex-col"
       style={{ ...themeStyles, backgroundColor: 'var(--app-bg)', color: 'var(--app-text)' }}
     >
       
@@ -399,6 +450,9 @@ export default function LessonPlayPage() {
         </div>
 
       </main>
+
+      <AppSupportButton settings={settings} />
+      <AppBottomNav language={app.default_language || 'pt-BR'} />
 
     </div>
   );

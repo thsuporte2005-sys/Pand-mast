@@ -25,16 +25,24 @@ export async function GET(req: Request, props: { params: Promise<{ slug: string 
       .eq('app_id', app.id)
       .maybeSingle();
 
-    const shortName = pwa?.short_name || app.name.slice(0, 12);
-    const themeColor = pwa?.theme_color || '#1E6BFF';
-    const bgColor = pwa?.background_color || '#071A2F';
+    const { data: settings } = await admin
+      .from('app_settings')
+      .select('display_name, square_icon_url, logo_url, primary_color, background_color')
+      .eq('app_id', app.id)
+      .maybeSingle();
+
+    const displayName = settings?.display_name || app.display_name || app.name;
+    const iconUrl = settings?.square_icon_url || app.square_icon_url || settings?.logo_url || app.logo_url || '/pngs/loggo.png';
+    const shortName = pwa?.short_name || displayName.slice(0, 12);
+    const themeColor = pwa?.theme_color || settings?.primary_color || '#1E6BFF';
+    const bgColor = pwa?.background_color || settings?.background_color || '#071A2F';
     const display = pwa?.display || 'standalone';
     const orientation = pwa?.orientation || 'portrait';
 
     const manifest = {
-      name: app.name,
+      name: displayName,
       short_name: shortName,
-      description: app.description || '',
+      description: app.subtitle || app.description || '',
       start_url: `/app/${slug}/home`,
       display: display,
       orientation: orientation,
@@ -42,13 +50,13 @@ export async function GET(req: Request, props: { params: Promise<{ slug: string 
       theme_color: themeColor,
       icons: [
         {
-          src: app.logo_url || '/pngs/loggo.png',
+          src: iconUrl,
           sizes: '192x192',
           type: 'image/png',
           purpose: 'any maskable'
         },
         {
-          src: app.logo_url || '/pngs/loggo.png',
+          src: iconUrl,
           sizes: '512x512',
           type: 'image/png',
           purpose: 'any maskable'

@@ -14,18 +14,32 @@ export async function generateMetadata(props: { params: Promise<{ slug: string }
     const admin = createAdminClient();
     const { data: app } = await admin
       .from('apps')
-      .select('name, description')
+      .select('id, name, description, display_name, subtitle, logo_url, square_icon_url')
       .eq('slug', slug)
       .single();
 
     if (app) {
+      const { data: settings } = await admin
+        .from('app_settings')
+        .select('display_name, subtitle, logo_url, square_icon_url')
+        .eq('app_id', app.id)
+        .maybeSingle();
+
+      const title = settings?.display_name || app.display_name || app.name;
+      const description = settings?.subtitle || app.subtitle || app.description || 'Área de Membros e Treinamentos Privada';
+      const icon = settings?.square_icon_url || app.square_icon_url || settings?.logo_url || app.logo_url || '/pngs/loggo.png';
+
       return {
-        title: app.name,
-        description: app.description || 'Área de Membros e Treinamentos Privada',
+        title,
+        description,
+        icons: {
+          icon,
+          apple: icon,
+        },
         appleWebApp: {
           capable: true,
           statusBarStyle: 'default',
-          title: app.name,
+          title,
         },
         manifest: `/app/${slug}/manifest.json`,
       };

@@ -11,28 +11,19 @@ import {
   Activity, 
   AlertTriangle, 
   ArrowUpRight,
-  TrendingUp,
   Clock
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
-import { 
-  AreaChart, 
-  Area, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  Legend
-} from 'recharts';
 import type { AuditLogRecord, WebhookEventRecord } from '@/lib/types';
 
 interface DashboardStats {
   totalApps: number;
   totalUsers: number;
   activeAccesses: number;
+  blockedAccesses: number;
+  totalWebhooks: number;
+  approvedSales: number;
+  recentErrors: number;
   totalRevenue: number;
   recentWebhooks: WebhookEventRecord[];
   recentLogs: AuditLogRecord[];
@@ -43,6 +34,10 @@ export default function AdminDashboard() {
     totalApps: 0,
     totalUsers: 0,
     activeAccesses: 0,
+    blockedAccesses: 0,
+    totalWebhooks: 0,
+    approvedSales: 0,
+    recentErrors: 0,
     totalRevenue: 0,
     recentWebhooks: [],
     recentLogs: [],
@@ -72,6 +67,25 @@ export default function AdminDashboard() {
         .select('*', { count: 'exact', head: true })
         .eq('status', 'active');
 
+      const { count: blockedCount } = await supabase
+        .from('user_app_access')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'blocked');
+
+      const { count: webhookCount } = await supabase
+        .from('webhook_events')
+        .select('*', { count: 'exact', head: true });
+
+      const { count: approvedSalesCount } = await supabase
+        .from('orders')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'approved');
+
+      const { count: recentErrorsCount } = await supabase
+        .from('webhook_events')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'failed');
+
       // 4. Fetch sales sum
       const { data: salesData } = await supabase
         .from('orders')
@@ -98,6 +112,10 @@ export default function AdminDashboard() {
         totalApps: appsCount || 0,
         totalUsers: usersCount || 0,
         activeAccesses: activeCount || 0,
+        blockedAccesses: blockedCount || 0,
+        totalWebhooks: webhookCount || 0,
+        approvedSales: approvedSalesCount || 0,
+        recentErrors: recentErrorsCount || 0,
         totalRevenue: revenue,
         recentWebhooks: webhooks || [],
         recentLogs: logs || [],
@@ -118,15 +136,6 @@ export default function AdminDashboard() {
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
   };
-
-  // Mock chart data structure built from recent events
-  const chartData = [
-    { name: 'Jan', vendas: stats.totalRevenue * 0.05 + 100 },
-    { name: 'Fev', vendas: stats.totalRevenue * 0.1 + 150 },
-    { name: 'Mar', vendas: stats.totalRevenue * 0.15 + 300 },
-    { name: 'Abr', vendas: stats.totalRevenue * 0.25 + 400 },
-    { name: 'Mai', vendas: stats.totalRevenue || 950 },
-  ];
 
   if (loading) {
     return (
@@ -171,8 +180,7 @@ export default function AdminDashboard() {
             </div>
           </div>
           <div className="flex items-center gap-1.5 mt-4 text-emerald-400 text-xs">
-            <TrendingUp className="h-3.5 w-3.5" />
-            <span>Faturamento acumulado</span>
+            <span>Somente pedidos com status aprovado</span>
           </div>
         </div>
 
@@ -224,40 +232,94 @@ export default function AdminDashboard() {
           </div>
         </div>
 
+        <div className="glass-panel p-6 rounded-2xl relative overflow-hidden flex flex-col justify-between">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-text-gray">Webhooks Recebidos</p>
+              <h3 className="text-2xl font-bold text-text-white mt-2">{stats.totalWebhooks}</h3>
+            </div>
+            <div className="p-3 bg-sky-500/10 border border-sky-500/20 text-sky-300 rounded-xl">
+              <RefreshCw className="h-5 w-5" />
+            </div>
+          </div>
+          <div className="mt-4 text-text-gray text-xs">Total salvo em webhook_events</div>
+        </div>
+
+        <div className="glass-panel p-6 rounded-2xl relative overflow-hidden flex flex-col justify-between">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-text-gray">Vendas Aprovadas</p>
+              <h3 className="text-2xl font-bold text-text-white mt-2">{stats.approvedSales}</h3>
+            </div>
+            <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 rounded-xl">
+              <CheckCircle className="h-5 w-5" />
+            </div>
+          </div>
+          <div className="mt-4 text-text-gray text-xs">Pedidos aprovados em orders</div>
+        </div>
+
+        <div className="glass-panel p-6 rounded-2xl relative overflow-hidden flex flex-col justify-between">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-text-gray">Acessos Bloqueados</p>
+              <h3 className="text-2xl font-bold text-text-white mt-2">{stats.blockedAccesses}</h3>
+            </div>
+            <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-300 rounded-xl">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+          </div>
+          <div className="mt-4 text-text-gray text-xs">Refund, chargeback ou bloqueio manual</div>
+        </div>
+
+        <div className="glass-panel p-6 rounded-2xl relative overflow-hidden flex flex-col justify-between">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-text-gray">Erros Recentes</p>
+              <h3 className="text-2xl font-bold text-text-white mt-2">{stats.recentErrors}</h3>
+            </div>
+            <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-300 rounded-xl">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+          </div>
+          <div className="mt-4 text-text-gray text-xs">Webhooks marcados como failed</div>
+        </div>
+
       </div>
 
       {/* Main Charts & Activity Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* Chart Column */}
+        {/* Real operations summary */}
         <div className="glass-panel p-6 rounded-2xl lg:col-span-2 space-y-6">
           <div className="flex items-center justify-between">
             <h4 className="text-md font-bold text-text-white flex items-center gap-2">
               <Activity className="h-4 w-4 text-light-blue" />
-              Evolução das Vendas (BRL)
+              Indicadores Reais
             </h4>
           </div>
-          
-          <div className="h-80 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#1E6BFF" stopOpacity={0.4}/>
-                    <stop offset="95%" stopColor="#1E6BFF" stopOpacity={0.0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1B3554" opacity={0.3} />
-                <XAxis dataKey="name" stroke="#9BAEC8" fontSize={11} tickLine={false} />
-                <YAxis stroke="#9BAEC8" fontSize={11} tickLine={false} />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: '#0B2A4A', borderColor: '#1B3554', color: '#F5F8FF', borderRadius: '8px' }} 
-                  labelStyle={{ color: '#9BAEC8', fontWeight: 'bold' }}
-                />
-                <Area type="monotone" dataKey="vendas" stroke="#1E6BFF" strokeWidth={2} fillOpacity={1} fill="url(#colorSales)" />
-              </AreaChart>
-            </ResponsiveContainer>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl border border-border-color/60 bg-primary-bg/40 p-4">
+              <p className="text-[10px] uppercase tracking-wider text-text-gray">Apps criados</p>
+              <p className="mt-2 text-xl font-bold text-text-white">{stats.totalApps}</p>
+            </div>
+            <div className="rounded-xl border border-border-color/60 bg-primary-bg/40 p-4">
+              <p className="text-[10px] uppercase tracking-wider text-text-gray">Usuarios finais</p>
+              <p className="mt-2 text-xl font-bold text-text-white">{stats.totalUsers}</p>
+            </div>
+            <div className="rounded-xl border border-border-color/60 bg-primary-bg/40 p-4">
+              <p className="text-[10px] uppercase tracking-wider text-text-gray">Acessos ativos</p>
+              <p className="mt-2 text-xl font-bold text-text-white">{stats.activeAccesses}</p>
+            </div>
+            <div className="rounded-xl border border-border-color/60 bg-primary-bg/40 p-4">
+              <p className="text-[10px] uppercase tracking-wider text-text-gray">Receita aprovada</p>
+              <p className="mt-2 text-xl font-bold text-text-white">{formatCurrency(stats.totalRevenue)}</p>
+            </div>
           </div>
+          <p className="text-xs leading-relaxed text-text-gray">
+            A serie historica foi removida porque nao havia tabela agregada por periodo. Quando houver eventos suficientes,
+            este painel pode evoluir para uma query real por data sem usar mock.
+          </p>
         </div>
 
         {/* Activity Logs Column */}

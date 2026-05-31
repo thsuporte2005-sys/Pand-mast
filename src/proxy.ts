@@ -1,6 +1,40 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
+interface ModuleReleaseRecord {
+  release_type: string | null;
+  release_after_days: number | null;
+  is_scheduled_release: boolean | null;
+}
+
+interface AccessRecord {
+  status: string | null;
+  granted_at: string | null;
+  access_granted_at: string | null;
+}
+
+function isModuleReleased(moduleItem: ModuleReleaseRecord | null, access: AccessRecord | null) {
+  if (!moduleItem || !access || access.status !== 'active') return false;
+
+  const isScheduled =
+    moduleItem.release_type === 'after_purchase_days' ||
+    Boolean(moduleItem.is_scheduled_release);
+  const releaseAfterDays = Math.max(0, Number(moduleItem.release_after_days || 0));
+
+  if (!isScheduled || releaseAfterDays === 0) return true;
+
+  const rawAccessDate = access.access_granted_at || access.granted_at;
+  if (!rawAccessDate) return false;
+
+  const accessDate = new Date(rawAccessDate);
+  if (Number.isNaN(accessDate.getTime())) return false;
+
+  const unlockDate = new Date(accessDate);
+  unlockDate.setDate(unlockDate.getDate() + releaseAfterDays);
+
+  return new Date() >= unlockDate;
+}
+
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({
     request: {
@@ -137,7 +171,7 @@ export async function proxy(request: NextRequest) {
       if (!admin) {
         const { data: access } = await supabase
           .from('user_app_access')
-          .select('status')
+          .select('status, granted_at, access_granted_at')
           .eq('user_id', user.id)
           .eq('app_id', app.id)
           .eq('status', 'active')
@@ -145,6 +179,37 @@ export async function proxy(request: NextRequest) {
 
         if (!access) {
           return NextResponse.redirect(new URL(`/app/${slug}/login?error=no-access`, request.url));
+        }
+
+        let targetModuleId: string | null = null;
+
+        if (subpath === 'modules' && segments[4]) {
+          targetModuleId = segments[4];
+        }
+
+        if (subpath === 'lessons' && segments[4]) {
+          const { data: lesson } = await supabase
+            .from('app_lessons')
+            .select('module_id')
+            .eq('id', segments[4])
+            .maybeSingle();
+
+          targetModuleId = lesson?.module_id || null;
+        }
+
+        if (targetModuleId) {
+          const { data: moduleItem } = await supabase
+            .from('app_modules')
+            .select('release_type, release_after_days, is_scheduled_release')
+            .eq('id', targetModuleId)
+            .eq('app_id', app.id)
+            .maybeSingle();
+
+          if (!isModuleReleased(moduleItem, access)) {
+            return NextResponse.redirect(
+              new URL(`/app/${slug}/modules?locked=${targetModuleId}`, request.url)
+            );
+          }
         }
       }
     }
