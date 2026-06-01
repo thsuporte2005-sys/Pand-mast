@@ -35,6 +35,7 @@ interface PreviewCarouselImage {
   id: string;
   image_url: string;
   alt_text?: string | null;
+  sort_order?: number | null;
   is_active?: boolean;
 }
 
@@ -148,7 +149,7 @@ export default function AppSettingsPage() {
               .order('order_index', { ascending: true }),
             supabase
               .from('app_carousel_images')
-              .select('id, image_url, alt_text, is_active')
+              .select('id, image_url, alt_text, sort_order, is_active')
               .eq('app_id', appId)
               .order('sort_order', { ascending: true }),
           ]);
@@ -731,6 +732,7 @@ export default function AppSettingsPage() {
       </form>
 
       <AppPreviewPhone
+        appId={appId}
         name={name}
         description={description}
         logoUrl={logoUrl}

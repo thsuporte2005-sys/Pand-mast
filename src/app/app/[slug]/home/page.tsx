@@ -17,6 +17,7 @@ import {
   PlayCircle,
 } from 'lucide-react';
 import { AppBottomNav } from '@/components/app-bottom-nav';
+import { AppCarousel, type AppCarouselImage } from '@/components/app-carousel';
 import { AppInstallButton } from '@/components/app-install-button';
 import { AppSupportButton } from '@/components/app-support-button';
 import { ModuleCover } from '@/components/module-cover';
@@ -51,13 +52,6 @@ interface Lesson {
   is_published: boolean;
 }
 
-interface CarouselImage {
-  id: string;
-  image_url: string;
-  alt_text: string | null;
-  sort_order: number;
-}
-
 type TranslationMap = Record<string, string>;
 
 function formatTranslatedText(value: string, dynamicValues?: Record<string, string | number>) {
@@ -87,7 +81,7 @@ export default function AppHomePage() {
   });
   const [modules, setModules] = useState<Module[]>([]);
   const [lessons, setLessons] = useState<Lesson[]>([]);
-  const [carouselImages, setCarouselImages] = useState<CarouselImage[]>([]);
+  const [carouselImages, setCarouselImages] = useState<AppCarouselImage[]>([]);
   const [translations, setTranslations] = useState<TranslationMap>({});
   const [expandedModuleId, setExpandedModuleId] = useState<string | null>(null);
   const [completedLessonIds, setCompletedLessonIds] = useState<string[]>([]);
@@ -319,20 +313,13 @@ export default function AppHomePage() {
         </div>
       </header>
 
-      {carouselImages.length > 0 && (
-        <section className="mx-auto mt-4 max-w-4xl px-4">
-          <div className="flex snap-x gap-3 overflow-x-auto scroll-smooth pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {carouselImages.map((image) => (
-              <div
-                key={image.id}
-                className="relative aspect-[16/9] min-w-[82%] snap-start overflow-hidden rounded-2xl border border-white/10 bg-[#0E223A] sm:min-w-[46%]"
-              >
-                <img src={image.image_url} alt={image.alt_text || brandName} className="h-full w-full object-cover" />
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      <AppCarousel
+        appId={app.id}
+        appName={brandName}
+        carouselEnabled={Boolean(settings?.carousel_enabled)}
+        className="mx-auto mt-4 max-w-4xl px-4"
+        images={carouselImages}
+      />
 
       <main className="mx-auto mt-6 max-w-4xl space-y-6 px-4">
         <section

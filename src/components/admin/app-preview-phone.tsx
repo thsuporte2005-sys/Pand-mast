@@ -1,13 +1,7 @@
 'use client';
 
 import { Bell, Headphones, Home, Layers, LifeBuoy, User, Users } from 'lucide-react';
-
-interface PreviewCarouselImage {
-  id: string;
-  image_url: string;
-  alt_text?: string | null;
-  is_active?: boolean;
-}
+import { AppCarousel, type AppCarouselImage } from '@/components/app-carousel';
 
 interface PreviewModule {
   id: string;
@@ -19,6 +13,7 @@ interface PreviewModule {
 }
 
 interface AppPreviewPhoneProps {
+  appId: string;
   name: string;
   description?: string;
   logoUrl?: string;
@@ -29,7 +24,7 @@ interface AppPreviewPhoneProps {
   backgroundColor: string;
   textColor: string;
   carouselEnabled: boolean;
-  carouselImages: PreviewCarouselImage[];
+  carouselImages: AppCarouselImage[];
   modules: PreviewModule[];
   supportEnabled: boolean;
   supportIconUrl?: string;
@@ -47,6 +42,7 @@ function getInitials(name: string) {
 }
 
 export function AppPreviewPhone({
+  appId,
   name,
   description,
   logoUrl,
@@ -62,8 +58,6 @@ export function AppPreviewPhone({
   supportEnabled,
   supportIconUrl,
 }: AppPreviewPhoneProps) {
-  const activeImages = carouselImages.filter((image) => image.is_active !== false);
-
   return (
     <aside className="lg:sticky lg:top-6">
       <div className="mb-3 flex items-center justify-between px-1">
@@ -101,20 +95,14 @@ export function AppPreviewPhone({
               </div>
             </header>
 
-            {carouselEnabled && activeImages.length > 0 && (
-              <section className="px-4 pt-4">
-                <div className="flex snap-x gap-2 overflow-x-auto scroll-smooth pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {activeImages.map((image) => (
-                    <img
-                      key={image.id}
-                      src={image.image_url}
-                      alt={image.alt_text || ''}
-                      className="aspect-[16/9] w-[83%] shrink-0 snap-start rounded-xl border border-white/10 object-cover"
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
+            <AppCarousel
+              appId={appId}
+              appName={name || 'Nome do app'}
+              carouselEnabled={carouselEnabled}
+              className="px-4 pt-4"
+              compact
+              images={carouselImages}
+            />
 
             <main className="space-y-4 px-4 pt-4">
               <section
